@@ -1,17 +1,9 @@
-# verdia - jogo da grama (bancada do NEXT)
-#
-# O computador comanda o jogo: sorteia a sequencia, manda o Arduino acender
-# os LEDs, olha a camera para ver em qual grama a pessoa colocou a mao e
-# mostra o placar e o ranking.
-#
-# Teclas (equipe):
-#   ENTER  novo jogador (digita o nome e ENTER de novo para comecar)
-#   C      calibrar a camera (desenhar as 3 regioes)
-#   B      recalibrar so o verde (se a luz do local mudar)
-#   F      tela cheia / janela
-#   ESC    cancelar e voltar para a tela inicial
-#
-# Instalar: pip install opencv-python pygame pyserial
+"""verdia — jogo da grama (bancada do NEXT).
+
+O computador comanda a partida: sorteia a sequência, pede ao Arduino para
+acender os LEDs, usa a câmera para ver em qual grama a mão foi colocada e
+mostra o placar e o ranking.
+"""
 
 import json
 import os
@@ -25,48 +17,44 @@ import serial
 import serial.tools.list_ports
 
 
-# ------------------------------------------------------------------
-# Configuracoes
-# ------------------------------------------------------------------
+# Variáveis de ambiente (explicadas no README)
+CAMERA = int(os.environ.get("VERDIA_CAMERA", "0"))
+PORTA_ARDUINO = os.environ.get("VERDIA_PORTA")
 
-CAMERA = 0                # troque para 1, 2... se abrir a camera errada
-MONITOR = 0               # 1 se a tela cheia tiver que ir para a TV/segundo monitor
-PORTA_ARDUINO = None      # None = procura sozinho. Ou ex.: "/dev/cu.usbmodem14101"
-
-TEMPO_LED_ACESO = 0.6     # segundos que cada LED fica aceso na sequencia
-TEMPO_LED_APAGADO = 0.3   # intervalo entre um LED e outro
+# Ritmo do jogo, em segundos
+TEMPO_LED_ACESO = 0.6
+TEMPO_LED_APAGADO = 0.3
 TEMPO_ANTES_SEQUENCIA = 1.0
-TEMPO_CONFIRMA = 0.4      # mao parada numa grama por esse tempo = jogada
-TEMPO_MAO_FORA = 0.2      # todas as gramas livres por esse tempo = mao saiu
-TEMPO_LIMITE = 5.0        # sem jogada por esse tempo = game over
-TEMPO_START = 2.5         # a animacao de start do Arduino dura ~2 s
-TEMPO_GAME_OVER = 8.0     # tempo da tela de fim de jogo
+TEMPO_CONFIRMA = 0.4      # mão parada sobre uma grama por esse tempo vira jogada
+TEMPO_MAO_FORA = 0.2      # todas as gramas livres por esse tempo = mão saiu
+TEMPO_LIMITE = 5.0        # sem jogada por esse tempo = fim de jogo
+TEMPO_INICIO = 2.5        # a animação de início do Arduino dura cerca de 2 s
+TEMPO_FIM = 8.0
 
-LIMIAR_MAO = 0.35         # parte da regiao coberta para contar como mao
-LIMIAR_LIVRE = 0.15       # abaixo disso a regiao esta livre
-
-# faixa de verde em HSV (no OpenCV o H vai de 0 a 179)
-VERDE_MIN = np.array([30, 40, 30])
+# Detecção: fração da região que deixou de ser verde
+LIMIAR_MAO = 0.35
+LIMIAR_LIVRE = 0.15
+VERDE_MIN = np.array([30, 40, 30])     # HSV do OpenCV (H vai de 0 a 179)
 VERDE_MAX = np.array([90, 255, 255])
 
-NOMES_ZONAS = ["pequena (verde)", "média (amarelo)", "grande (vermelho)"]
-CORES = ["verde", "amarelo", "vermelho"]
-COMANDO_COR = [b"v", b"a", b"r"]
-COR_ZONA = [(70, 190, 90), (240, 200, 50), (225, 60, 60)]
+NOMES_GRAMAS = ["pequena", "média", "grande"]
+COMANDOS_LED = [b"v", b"a", b"r"]
 
-FUNDO = (18, 38, 28)
-TEXTO = (235, 240, 230)
-TEXTO_FRACO = (150, 170, 155)
-DESTAQUE = (130, 200, 120)
+# Cores da marca
+BRANCO = (255, 255, 255)
+TEAL = (46, 140, 128)
+TEAL_ESCURO = (22, 84, 76)
+VERDE_MARCA = (112, 180, 114)
+VERDE_CLARO = (139, 207, 120)
+MENTA = (197, 226, 208)
+LIMA = (233, 255, 60)
+CORES_LED = [(72, 214, 110), (255, 214, 64), (255, 94, 84)]
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
 ARQ_CALIBRACAO = os.path.join(PASTA, "calibracao.json")
 ARQ_RANKING = os.path.join(PASTA, "ranking.json")
+ARQ_FONTE_MARCA = os.path.join(PASTA, "Alice-Regular.ttf")
 
-
-# ------------------------------------------------------------------
-# Arquivos, Arduino e camera
-# ------------------------------------------------------------------
 
 def carregar_json(arquivo, padrao):
     try:
@@ -95,37 +83,54 @@ def conectar_arduino():
         return None
 
     conexao = serial.Serial(porta, 9600, timeout=0)
-    time.sleep(2)  # o UNO reinicia quando a porta e aberta
+    time.sleep(2)  # o UNO reinicia quando a porta serial é aberta
     print("Arduino conectado em", porta)
     return conexao
 
 
 def fracao_verde(hsv, zona):
     x, y, w, h = zona
-    recorte = hsv[y:y + h, x:x + w]
-    mascara = cv2.inRange(recorte, VERDE_MIN, VERDE_MAX)
+    mascara = cv2.inRange(hsv[y:y + h, x:x + w], VERDE_MIN, VERDE_MAX)
     return cv2.countNonZero(mascara) / mascara.size
 
 
-# ------------------------------------------------------------------
-# Jogo
-# ------------------------------------------------------------------
+def fundo_da_marca(largura, altura):
+    # Degradê no estilo das artes da verdia: manchas desfocadas sobre o teal
+    base = np.zeros((90, 160, 3), np.uint8)
+    base[:] = TEAL
+
+    manchas = [
+        ((80, 98), (95, 22), VERDE_MARCA),
+        ((-5, 55), (22, 40), VERDE_CLARO),
+        ((128, -6), (34, 10), LIMA),
+        ((168, 40), (18, 30), MENTA),
+        ((0, 95), (40, 12), MENTA),
+    ]
+    for centro, eixos, cor in manchas:
+        cv2.ellipse(base, centro, eixos, -12, 0, 360, cor, -1)
+
+    base = cv2.GaussianBlur(base, (0, 0), 14)
+    base = cv2.resize(base, (largura, altura), interpolation=cv2.INTER_CUBIC)
+    return pygame.image.frombuffer(base.tobytes(), (largura, altura), "RGB").copy()
+
+
+def tela_para_camera(ponto, vista, largura, altura):
+    x0, y0, escala = vista
+    x = int((ponto[0] - x0) / escala)
+    y = int((ponto[1] - y0) / escala)
+    return min(max(x, 0), largura), min(max(y, 0), altura)
+
 
 class Jogo:
 
     def __init__(self):
-        pygame.init()
-        pygame.key.stop_text_input()
-        self.tela = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
+        pygame.display.init()
+        pygame.font.init()
         pygame.display.set_caption("verdia")
+        self.tela = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
         self.tela_cheia = False
         self.relogio = pygame.time.Clock()
-
-        fonte = "helveticaneue,helvetica,arial"
-        self.fonte_titulo = pygame.font.SysFont("alice,georgia", 64)
-        self.fonte_grande = pygame.font.SysFont(fonte, 72, bold=True)
-        self.fonte_media = pygame.font.SysFont(fonte, 38)
-        self.fonte_pequena = pygame.font.SysFont(fonte, 22)
+        self.preparar_tela()
 
         self.camera = cv2.VideoCapture(CAMERA)
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -151,11 +156,11 @@ class Jogo:
         self.pontos = 0
         self.motivo = ""
         self.ultima_entrada = None
-        self.t_evento = 0
-        self.t_ultima = 0
+        self.t_evento = 0.0
+        self.t_ultima = 0.0
         self.t_livre = None
         self.zona_atual = None
-        self.t_zona = 0
+        self.t_zona = 0.0
         self.esperando_soltar = False
 
         self.zonas_novas = []
@@ -163,7 +168,35 @@ class Jogo:
 
         self.enviar(b"I")
 
-    # ---------------- LEDs ----------------
+    # ----- Tela -----
+
+    def preparar_tela(self):
+        largura, altura = self.tela.get_size()
+        k = altura / 720
+
+        if os.path.exists(ARQ_FONTE_MARCA):
+            marca = lambda tamanho: pygame.font.Font(ARQ_FONTE_MARCA, int(tamanho * k))
+        else:
+            marca = lambda tamanho: pygame.font.SysFont("georgia", int(tamanho * k))
+
+        texto = "helveticaneue,helvetica,arial"
+        self.fonte_logo = marca(60)
+        self.fonte_titulo = marca(68)
+        self.fonte_numero = marca(64)
+        self.fonte_media = pygame.font.SysFont(texto, int(34 * k))
+        self.fonte_pequena = pygame.font.SysFont(texto, int(22 * k))
+        self.k = k
+        self.fundo = fundo_da_marca(largura, altura)
+
+    def alternar_tela_cheia(self):
+        self.tela_cheia = not self.tela_cheia
+        if self.tela_cheia:
+            self.tela = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        else:
+            self.tela = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
+        self.preparar_tela()
+
+    # ----- LEDs -----
 
     def enviar(self, comando):
         if self.arduino is None:
@@ -171,50 +204,50 @@ class Jogo:
         try:
             self.arduino.write(comando)
         except serial.SerialException:
-            print("Perdi a conexão com o Arduino. Seguindo sem os LEDs.")
+            print("Conexão com o Arduino perdida. Seguindo sem os LEDs.")
             self.arduino = None
 
     def acender(self, cor):
         self.led_aceso = cor
-        self.enviar(COMANDO_COR[cor])
+        self.enviar(COMANDOS_LED[cor])
 
     def apagar(self):
         self.led_aceso = None
         self.enviar(b"0")
 
-    # ---------------- Camera ----------------
+    # ----- Câmera -----
 
     def medir(self):
-        if self.frame is None or self.calib is None:
+        frame = self.frame
+        if frame is None or self.calib is None:
             self.cobertura = [0.0, 0.0, 0.0]
             return
 
-        h, w = self.frame.shape[:2]
-        if [w, h] != self.calib["tamanho"]:
+        altura, largura = frame.shape[:2]
+        if [largura, altura] != self.calib["tamanho"]:
             self.calib = None
             self.aviso = "A resolução da câmera mudou. Calibre de novo (C)."
             return
 
-        hsv = cv2.cvtColor(self.frame, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         for i in range(3):
             verde = fracao_verde(hsv, self.calib["zonas"][i])
-            base = self.calib["base"][i]
-            self.cobertura[i] = min(1.0, max(0.0, 1 - verde / base))
+            self.cobertura[i] = min(1.0, max(0.0, 1 - verde / self.calib["base"][i]))
 
-    def medir_base(self, zonas):
-        # quanto de verde cada regiao tem sem nenhuma mao em cima
-        hsv = cv2.cvtColor(self.frame, cv2.COLOR_BGR2HSV)
+    def medir_base(self, frame, zonas):
+        # Quanto de verde cada região tem sem nenhuma mão em cima
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         base = [fracao_verde(hsv, z) for z in zonas]
 
         for i in range(3):
             if base[i] < 0.3:
-                self.aviso = (f"A região {CORES[i]} quase não tem verde ({base[i]:.0%}). "
-                              "Desenhe só sobre a grama, sem mãos em cima.")
+                self.aviso = (f"A região da grama {NOMES_GRAMAS[i]} quase não tem verde "
+                              f"({base[i]:.0%}). Desenhe só sobre a grama, sem mãos em cima.")
                 return None
 
         return base
 
-    # ---------------- Fluxo do jogo ----------------
+    # ----- Partida -----
 
     def voltar_espera(self):
         pygame.key.stop_text_input()
@@ -235,8 +268,8 @@ class Jogo:
         self.pontos = 0
         self.led_aceso = None
         self.enviar(b"S")
-        self.estado = "START"
-        self.t_evento = self.agora + TEMPO_START
+        self.estado = "INICIO"
+        self.t_evento = self.agora + TEMPO_INICIO
 
     def nova_rodada(self):
         self.sequencia.append(random.randrange(3))
@@ -248,7 +281,7 @@ class Jogo:
     def vez_do_jogador(self):
         self.estado = "JOGADOR"
         self.posicao = 0
-        self.esperando_soltar = True  # quem ja estava com a mao na grama precisa tirar
+        self.esperando_soltar = True  # quem pôs a mão antes da hora precisa tirar
         self.t_livre = None
         self.zona_atual = None
         self.t_ultima = self.agora
@@ -264,7 +297,7 @@ class Jogo:
 
     def ler_jogada(self):
         if self.agora - self.t_ultima > TEMPO_LIMITE:
-            self.fim_de_jogo("Tempo esgotado")
+            self.fim_de_jogo("O tempo acabou")
             return
 
         if self.esperando_soltar:
@@ -273,9 +306,8 @@ class Jogo:
                 self.apagar()
             return
 
+        # Só conta quando exatamente uma grama está coberta
         cobertas = [i for i in range(3) if self.cobertura[i] >= LIMIAR_MAO]
-
-        # so conta quando exatamente uma grama esta coberta
         if len(cobertas) != 1:
             self.zona_atual = None
             return
@@ -293,7 +325,7 @@ class Jogo:
 
         certa = self.sequencia[self.posicao]
         if zona != certa:
-            self.fim_de_jogo(f"Era a grama {NOMES_ZONAS[certa]}")
+            self.fim_de_jogo(f"Era a grama {NOMES_GRAMAS[certa]}")
             return
 
         self.acender(zona)
@@ -311,8 +343,8 @@ class Jogo:
         self.enviar(b"X")
         self.led_aceso = None
         self.motivo = motivo
-        self.estado = "GAMEOVER"
-        self.t_evento = self.agora + TEMPO_GAME_OVER
+        self.estado = "FIM"
+        self.t_evento = self.agora + TEMPO_FIM
 
         entrada = {
             "nome": self.nome.strip(),
@@ -324,22 +356,22 @@ class Jogo:
         self.ultima_entrada = entrada
 
     def atualizar(self):
-        if self.estado == "START":
+        if self.estado == "INICIO":
             if self.agora >= self.t_evento:
                 self.nova_rodada()
 
         elif self.estado == "MOSTRANDO":
-            if self.agora >= self.t_evento:
-                if self.led_aceso is None:
-                    if self.posicao < len(self.sequencia):
-                        self.acender(self.sequencia[self.posicao])
-                        self.t_evento = self.agora + TEMPO_LED_ACESO
-                    else:
-                        self.vez_do_jogador()
-                else:
-                    self.apagar()
-                    self.posicao += 1
-                    self.t_evento = self.agora + TEMPO_LED_APAGADO
+            if self.agora < self.t_evento:
+                return
+            if self.led_aceso is not None:
+                self.apagar()
+                self.posicao += 1
+                self.t_evento = self.agora + TEMPO_LED_APAGADO
+            elif self.posicao < len(self.sequencia):
+                self.acender(self.sequencia[self.posicao])
+                self.t_evento = self.agora + TEMPO_LED_ACESO
+            else:
+                self.vez_do_jogador()
 
         elif self.estado == "JOGADOR":
             self.ler_jogada()
@@ -351,16 +383,20 @@ class Jogo:
                 if self.agora >= self.t_evento:
                     self.nova_rodada()
 
-        elif self.estado == "GAMEOVER":
+        elif self.estado == "FIM":
             if self.agora >= self.t_evento:
                 self.voltar_espera()
 
-    # ---------------- Teclado e mouse ----------------
+    # ----- Teclado e mouse -----
 
     def tratar_eventos(self):
         for evento in pygame.event.get():
             if evento.type == pygame.QUIT:
                 self.rodando = False
+
+            elif evento.type == pygame.VIDEORESIZE:
+                self.tela = pygame.display.get_surface()
+                self.preparar_tela()
 
             elif evento.type == pygame.TEXTINPUT and self.estado == "NOME":
                 if len(self.nome) < 20:
@@ -385,13 +421,12 @@ class Jogo:
             if enter and self.calib:
                 self.pedir_nome()
             elif k == pygame.K_c:
-                self.iniciar_calibracao()
-            elif k == pygame.K_b and self.calib and self.frame is not None:
-                base = self.medir_base(self.calib["zonas"])
-                if base:
-                    self.calib["base"] = base
-                    salvar_json(ARQ_CALIBRACAO, self.calib)
-                    self.aviso = "Verde recalibrado."
+                self.aviso = ""
+                self.zonas_novas = []
+                self.arraste = None
+                self.estado = "CALIBRANDO"
+            elif k == pygame.K_b:
+                self.recalibrar_verde()
 
         elif self.estado == "NOME":
             if k == pygame.K_BACKSPACE:
@@ -399,32 +434,24 @@ class Jogo:
             elif enter and self.nome.strip():
                 self.iniciar_partida()
 
-        elif self.estado == "GAMEOVER":
-            if enter:
-                self.pedir_nome()
+        elif self.estado == "FIM" and enter:
+            self.pedir_nome()
 
-    def alternar_tela_cheia(self):
-        self.tela_cheia = not self.tela_cheia
-        if self.tela_cheia:
-            self.tela = pygame.display.set_mode((0, 0), pygame.FULLSCREEN, display=MONITOR)
-        else:
-            self.tela = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
+    def recalibrar_verde(self):
+        frame = self.frame
+        if frame is None or self.calib is None:
+            return
 
-    def iniciar_calibracao(self):
-        self.aviso = ""
-        self.zonas_novas = []
-        self.arraste = None
-        self.estado = "CALIBRANDO"
-
-    def tela_para_camera(self, ponto):
-        x0, y0, escala = self.vista
-        h, w = self.frame.shape[:2]
-        x = int((ponto[0] - x0) / escala)
-        y = int((ponto[1] - y0) / escala)
-        return min(max(x, 0), w), min(max(y, 0), h)
+        base = self.medir_base(frame, self.calib["zonas"])
+        if base:
+            self.calib["base"] = base
+            salvar_json(ARQ_CALIBRACAO, self.calib)
+            self.aviso = "Verde recalibrado."
 
     def mouse_calibracao(self, evento):
-        if self.frame is None or self.vista is None:
+        frame = self.frame
+        vista = self.vista
+        if frame is None or vista is None:
             return
 
         if evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
@@ -434,8 +461,9 @@ class Jogo:
             self.arraste[1] = evento.pos
 
         elif evento.type == pygame.MOUSEBUTTONUP and evento.button == 1 and self.arraste:
-            x1, y1 = self.tela_para_camera(self.arraste[0])
-            x2, y2 = self.tela_para_camera(evento.pos)
+            altura, largura = frame.shape[:2]
+            x1, y1 = tela_para_camera(self.arraste[0], vista, largura, altura)
+            x2, y2 = tela_para_camera(evento.pos, vista, largura, altura)
             self.arraste = None
 
             zona = [min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)]
@@ -444,177 +472,231 @@ class Jogo:
 
             self.aviso = ""
             self.zonas_novas.append(zona)
+            if len(self.zonas_novas) < 3:
+                return
 
-            if len(self.zonas_novas) == 3:
-                base = self.medir_base(self.zonas_novas)
-                if base is None:
-                    self.zonas_novas = []
-                    return
+            base = self.medir_base(frame, self.zonas_novas)
+            if base is None:
+                self.zonas_novas = []
+                return
 
-                h, w = self.frame.shape[:2]
-                self.calib = {"tamanho": [w, h], "zonas": self.zonas_novas, "base": base}
-                salvar_json(ARQ_CALIBRACAO, self.calib)
-                self.aviso = "Câmera calibrada."
-                self.voltar_espera()
+            self.calib = {"tamanho": [largura, altura], "zonas": self.zonas_novas, "base": base}
+            salvar_json(ARQ_CALIBRACAO, self.calib)
+            self.aviso = "Câmera calibrada."
+            self.voltar_espera()
 
-    # ---------------- Desenho ----------------
+    # ----- Desenho -----
 
-    def texto(self, fonte, conteudo, cor, centro=None, pos=None):
+    def texto(self, fonte, conteudo, cor=BRANCO, centro=None, pos=None, alfa=255):
         img = fonte.render(conteudo, True, cor)
+        img.set_alpha(alfa)
         rect = img.get_rect(center=centro) if centro else img.get_rect(topleft=pos)
         self.tela.blit(img, rect)
 
+    def cartao(self, rect, alfa=110):
+        superficie = pygame.Surface(rect.size, pygame.SRCALPHA)
+        raio = int(22 * self.k)
+        pygame.draw.rect(superficie, (*TEAL_ESCURO, alfa), superficie.get_rect(), border_radius=raio)
+        self.tela.blit(superficie, rect.topleft)
+
     def desenhar_camera(self, area):
-        if self.frame is None:
+        frame = self.frame
+        if frame is None:
             self.vista = None
-            self.texto(self.fonte_pequena, "Sem imagem da câmera", TEXTO_FRACO, centro=area.center)
+            self.texto(self.fonte_pequena, "Sem imagem da câmera", centro=area.center, alfa=180)
             return
 
-        h, w = self.frame.shape[:2]
-        escala = min(area.width / w, area.height / h)
-        tamanho = (int(w * escala), int(h * escala))
+        altura, largura = frame.shape[:2]
+        escala = min(area.width / largura, area.height / altura)
+        tamanho = (int(largura * escala), int(altura * escala))
         x0 = area.x + (area.width - tamanho[0]) // 2
         y0 = area.y + (area.height - tamanho[1]) // 2
 
-        rgb = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
-        img = pygame.image.frombuffer(rgb.tobytes(), (w, h), "RGB")
-        self.tela.blit(pygame.transform.smoothscale(img, tamanho), (x0, y0))
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = pygame.image.frombuffer(rgb.tobytes(), (largura, altura), "RGB")
+        img = pygame.transform.smoothscale(img, tamanho)
+
+        # cantos arredondados
+        mascara = pygame.Surface(tamanho, pygame.SRCALPHA)
+        pygame.draw.rect(mascara, (255, 255, 255, 255), mascara.get_rect(),
+                         border_radius=int(14 * self.k))
+        img = img.convert_alpha()
+        img.blit(mascara, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+
+        self.tela.blit(img, (x0, y0))
         self.vista = (x0, y0, escala)
 
     def desenhar_zonas(self, zonas, com_cobertura):
-        if self.vista is None:
+        vista = self.vista
+        if vista is None:
             return
 
-        x0, y0, escala = self.vista
+        x0, y0, escala = vista
         for i, (x, y, w, h) in enumerate(zonas):
             r = pygame.Rect(x0 + x * escala, y0 + y * escala, w * escala, h * escala)
-            pygame.draw.rect(self.tela, COR_ZONA[i], r, 6 if self.led_aceso == i else 2)
+            espessura = 6 if self.led_aceso == i else 2
+            pygame.draw.rect(self.tela, CORES_LED[i], r, espessura, border_radius=6)
             if com_cobertura:
-                self.texto(self.fonte_pequena, f"{self.cobertura[i]:.0%}", COR_ZONA[i],
-                           pos=(r.x + 6, r.y + 4))
+                self.texto(self.fonte_pequena, f"{self.cobertura[i]:.0%}", CORES_LED[i],
+                           pos=(r.x + 8, r.y + 4))
 
     def ranking_ordenado(self):
         return sorted(self.ranking, key=lambda r: (-r["pontos"], r["hora"]))
 
-    def desenhar_ranking(self, x, y, largura):
-        self.texto(self.fonte_media, "Ranking", TEXTO, pos=(x, y))
-        y += 60
+    def desenhar_ranking(self, area):
+        self.cartao(area)
+        k = self.k
+        x = area.x + int(28 * k)
+        y = area.y + int(22 * k)
+        largura = area.width - int(56 * k)
 
-        for i, r in enumerate(self.ranking_ordenado()[:10]):
-            cor = DESTAQUE if r is self.ultima_entrada else TEXTO
-            self.texto(self.fonte_pequena, f"{i + 1}. {r['nome']}", cor, pos=(x, y))
+        self.texto(self.fonte_media, "Ranking", pos=(x, y))
+        y += int(56 * k)
+
+        lista = self.ranking_ordenado()[:8]
+        if not lista:
+            self.texto(self.fonte_pequena, "Ninguém jogou ainda", pos=(x, y), alfa=170)
+
+        for i, r in enumerate(lista):
+            cor = LIMA if r is self.ultima_entrada else BRANCO
+            self.texto(self.fonte_pequena, f"{i + 1}", cor, pos=(x, y), alfa=170)
+            self.texto(self.fonte_pequena, r["nome"], cor, pos=(x + int(36 * k), y))
             pontos = self.fonte_pequena.render(str(r["pontos"]), True, cor)
             self.tela.blit(pontos, (x + largura - pontos.get_width(), y))
-            y += 32
+            y += int(34 * k)
+
+    def desenhar_progresso(self, cx, y):
+        # Uma bolinha por LED da sequência; as já acertadas ficam preenchidas
+        total = len(self.sequencia)
+        passo = int(30 * self.k)
+        raio = int(9 * self.k)
+        x = cx - (total - 1) * passo // 2
+        for i in range(total):
+            centro = (x + i * passo, y)
+            if i < self.posicao:
+                pygame.draw.circle(self.tela, LIMA, centro, raio)
+            else:
+                pygame.draw.circle(self.tela, BRANCO, centro, raio, 2)
 
     def desenhar_jogo(self):
         largura, altura = self.tela.get_size()
-        divisa = int(largura * 0.62)
-        cx = divisa // 2
+        k = self.k
+        margem = int(48 * k)
+        coluna = int(largura * 0.36)
+        cx = (largura - coluna - margem) // 2
         cy = altura // 2
 
-        self.texto(self.fonte_titulo, "verdia", DESTAQUE, pos=(50, 30))
+        self.texto(self.fonte_logo, "verdia", pos=(margem, int(28 * k)))
 
-        if self.estado in ("START", "MOSTRANDO", "JOGADOR", "ACERTOU"):
-            self.texto(self.fonte_media, self.nome, TEXTO_FRACO, centro=(cx, cy - 170))
-            self.texto(self.fonte_media, f"Pontos: {self.pontos}", TEXTO, centro=(cx, cy + 120))
+        em_jogo = self.estado in ("INICIO", "MOSTRANDO", "JOGADOR", "ACERTOU")
+        if em_jogo:
+            self.texto(self.fonte_media, self.nome, centro=(cx, cy - int(160 * k)), alfa=200)
+            self.texto(self.fonte_numero, str(self.pontos), centro=(cx, cy + int(150 * k)))
+            self.texto(self.fonte_pequena, "pontos", centro=(cx, cy + int(200 * k)), alfa=200)
 
         if self.estado == "ESPERA":
-            self.texto(self.fonte_grande, "Pronto para jogar?", TEXTO, centro=(cx, cy - 30))
+            self.texto(self.fonte_titulo, "Pronto para jogar?", centro=(cx, cy - int(20 * k)))
             if self.calib:
-                self.texto(self.fonte_media, "ENTER: novo jogador", TEXTO_FRACO, centro=(cx, cy + 50))
+                self.texto(self.fonte_media, "Pressione ENTER", centro=(cx, cy + int(60 * k)), alfa=210)
             else:
-                self.texto(self.fonte_media, "Câmera não calibrada: aperte C", COR_ZONA[2],
-                           centro=(cx, cy + 50))
+                self.texto(self.fonte_media, "Calibre a câmera com a tecla C", LIMA,
+                           centro=(cx, cy + int(60 * k)))
             if self.aviso:
-                self.texto(self.fonte_pequena, self.aviso, COR_ZONA[1], centro=(cx, cy + 110))
+                self.texto(self.fonte_pequena, self.aviso, LIMA, centro=(cx, cy + int(120 * k)))
 
         elif self.estado == "NOME":
-            self.texto(self.fonte_media, "Nome do jogador", TEXTO_FRACO, centro=(cx, cy - 80))
+            self.texto(self.fonte_media, "Nome do jogador", centro=(cx, cy - int(90 * k)), alfa=210)
             cursor = "|" if int(self.agora * 2) % 2 == 0 else " "
-            self.texto(self.fonte_grande, self.nome + cursor, TEXTO, centro=(cx, cy))
-            self.texto(self.fonte_pequena, "ENTER para começar", TEXTO_FRACO, centro=(cx, cy + 80))
+            self.texto(self.fonte_titulo, self.nome + cursor, centro=(cx, cy))
+            self.texto(self.fonte_pequena, "ENTER para começar", centro=(cx, cy + int(80 * k)), alfa=200)
 
-        elif self.estado == "START":
-            self.texto(self.fonte_grande, "Prepare-se!", TEXTO, centro=(cx, cy - 30))
+        elif self.estado == "INICIO":
+            self.texto(self.fonte_titulo, "Prepare-se", centro=(cx, cy - int(20 * k)))
 
         elif self.estado == "MOSTRANDO":
-            self.texto(self.fonte_grande, "Observe os LEDs", TEXTO, centro=(cx, cy - 30))
-            self.texto(self.fonte_media, f"Rodada {len(self.sequencia)}", TEXTO_FRACO,
-                       centro=(cx, cy + 50))
+            self.texto(self.fonte_titulo, "Observe os LEDs", centro=(cx, cy - int(20 * k)))
+            self.texto(self.fonte_media, f"Rodada {len(self.sequencia)}",
+                       centro=(cx, cy + int(60 * k)), alfa=210)
 
         elif self.estado == "JOGADOR":
             if self.esperando_soltar and max(self.cobertura) >= LIMIAR_LIVRE:
                 titulo = "Tire a mão da grama"
             else:
-                titulo = "Sua vez!"
-            self.texto(self.fonte_grande, titulo, TEXTO, centro=(cx, cy - 30))
-            self.texto(self.fonte_media, f"{self.posicao} de {len(self.sequencia)}", TEXTO_FRACO,
-                       centro=(cx, cy + 50))
+                titulo = "Sua vez"
+            self.texto(self.fonte_titulo, titulo, centro=(cx, cy - int(20 * k)))
+            self.desenhar_progresso(cx, cy + int(55 * k))
 
-            # barra do tempo restante
             resta = max(0.0, 1 - (self.agora - self.t_ultima) / TEMPO_LIMITE)
-            barra = pygame.Rect(cx - 200, cy + 170, 400, 14)
-            pygame.draw.rect(self.tela, (50, 70, 58), barra)
-            pygame.draw.rect(self.tela, DESTAQUE, (barra.x, barra.y, int(400 * resta), 14))
+            barra = pygame.Rect(0, 0, int(360 * k), int(8 * k))
+            barra.center = (cx, cy + int(95 * k))
+            trilho = pygame.Surface(barra.size, pygame.SRCALPHA)
+            pygame.draw.rect(trilho, (255, 255, 255, 70), trilho.get_rect(), border_radius=barra.height)
+            self.tela.blit(trilho, barra.topleft)
+            cheio = barra.copy()
+            cheio.width = int(barra.width * resta)
+            pygame.draw.rect(self.tela, LIMA, cheio, border_radius=barra.height)
 
         elif self.estado == "ACERTOU":
-            self.texto(self.fonte_grande, "Isso!", DESTAQUE, centro=(cx, cy - 30))
+            self.texto(self.fonte_titulo, "Isso!", centro=(cx, cy - int(20 * k)))
 
-        elif self.estado == "GAMEOVER":
-            self.texto(self.fonte_grande, "Fim de jogo", COR_ZONA[2], centro=(cx, cy - 110))
-            self.texto(self.fonte_media, self.motivo, TEXTO_FRACO, centro=(cx, cy - 40))
-            self.texto(self.fonte_media, f"{self.nome}: {self.pontos} pontos", TEXTO,
-                       centro=(cx, cy + 30))
+        elif self.estado == "FIM":
             ordem = self.ranking_ordenado()
             lugar = next(i for i, r in enumerate(ordem) if r is self.ultima_entrada) + 1
-            self.texto(self.fonte_media, f"{lugar}º lugar no ranking", DESTAQUE, centro=(cx, cy + 85))
-            self.texto(self.fonte_pequena, "ENTER: próximo jogador", TEXTO_FRACO,
-                       centro=(cx, cy + 150))
+            self.texto(self.fonte_titulo, "Fim de jogo", centro=(cx, cy - int(120 * k)))
+            self.texto(self.fonte_media, self.motivo, centro=(cx, cy - int(50 * k)), alfa=210)
+            self.texto(self.fonte_numero, f"{self.pontos} pontos", centro=(cx, cy + int(30 * k)))
+            self.texto(self.fonte_media, f"{self.nome} ficou em {lugar}º lugar",
+                       centro=(cx, cy + int(100 * k)))
+            self.texto(self.fonte_pequena, "ENTER para o próximo jogador",
+                       centro=(cx, cy + int(160 * k)), alfa=200)
 
-        # coluna da direita: ranking em cima, camera embaixo
-        x = divisa + 20
-        largura_coluna = largura - divisa - 50
-        self.desenhar_ranking(x, 40, largura_coluna)
+        # Coluna da direita: ranking em cima, câmera embaixo
+        x = largura - coluna - margem
+        alt_camera = int(coluna * 3 / 4) + int(40 * k)
+        area_camera = pygame.Rect(x, altura - margem - alt_camera, coluna, alt_camera)
+        area_ranking = pygame.Rect(x, margem, coluna, area_camera.y - margem - int(20 * k))
 
-        area_camera = pygame.Rect(x, altura - 40 - largura_coluna * 3 // 4,
-                                  largura_coluna, largura_coluna * 3 // 4)
-        self.desenhar_camera(area_camera)
+        self.desenhar_ranking(area_ranking)
+        self.cartao(area_camera)
+        self.desenhar_camera(area_camera.inflate(-int(40 * k), -int(40 * k)))
         if self.calib:
             self.desenhar_zonas(self.calib["zonas"], True)
 
-        self.texto(self.fonte_pequena, "ENTER jogador   C calibrar   B recalibrar verde   "
-                   "F tela cheia   ESC voltar", (80, 100, 88), pos=(50, altura - 40))
+        self.texto(self.fonte_pequena, "ENTER jogador · C calibrar · B recalibrar verde · "
+                   "F tela cheia · ESC voltar", pos=(margem, altura - int(44 * k)), alfa=150)
 
     def desenhar_calibracao(self):
         largura, altura = self.tela.get_size()
+        k = self.k
+        margem = int(48 * k)
 
         if len(self.zonas_novas) < 3:
             proxima = len(self.zonas_novas)
-            self.texto(self.fonte_media, f"Arraste um retângulo sobre a grama {NOMES_ZONAS[proxima]}",
-                       COR_ZONA[proxima], pos=(40, 25))
-        self.texto(self.fonte_pequena, "Sem mãos em cima da grama ao terminar.   ESC cancela",
-                   TEXTO_FRACO, pos=(40, 75))
+            self.texto(self.fonte_media, f"Arraste um retângulo sobre a grama {NOMES_GRAMAS[proxima]}",
+                       CORES_LED[proxima], pos=(margem, int(30 * k)))
+        self.texto(self.fonte_pequena, "Ao soltar o terceiro, não pode haver mãos sobre a grama.  "
+                   "ESC cancela.", pos=(margem, int(80 * k)), alfa=200)
         if self.aviso:
-            self.texto(self.fonte_pequena, self.aviso, COR_ZONA[2], pos=(40, altura - 35))
+            self.texto(self.fonte_pequena, self.aviso, LIMA, pos=(margem, altura - int(44 * k)))
 
-        self.desenhar_camera(pygame.Rect(40, 110, largura - 80, altura - 160))
+        area = pygame.Rect(margem, int(120 * k), largura - 2 * margem, altura - int(180 * k))
+        self.desenhar_camera(area)
         self.desenhar_zonas(self.zonas_novas, False)
 
         if self.arraste:
             (x1, y1), (x2, y2) = self.arraste
             r = pygame.Rect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
-            pygame.draw.rect(self.tela, COR_ZONA[len(self.zonas_novas)], r, 2)
+            pygame.draw.rect(self.tela, CORES_LED[len(self.zonas_novas)], r, 2, border_radius=6)
 
     def desenhar(self):
-        self.tela.fill(FUNDO)
+        self.tela.blit(self.fundo, (0, 0))
         if self.estado == "CALIBRANDO":
             self.desenhar_calibracao()
         else:
             self.desenhar_jogo()
         pygame.display.flip()
 
-    # ---------------- Laco principal ----------------
+    # ----- Laço principal -----
 
     def rodar(self):
         while self.rodando:
