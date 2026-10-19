@@ -1,37 +1,41 @@
-# Jogo da grama verdia
+# verdia — jogo da grama
 
-O jogo da grama, criado pelo grupo verdia, é uma dinâmica da bancada do NEXT. O Arduino acende os LEDs, a webcam vê em qual grama a mão foi colocada e o `jogo.py` controla a partida, o placar e o ranking.
+Dinâmica da bancada do NEXT. O Arduino acende os LEDs, a webcam vê em qual grama a mão foi colocada e o `jogo.py` controla a partida, o placar e o ranking.
 
 ## Arquivos
 
-| Arquivo                           | Para quê                                                   |
-| --------------------------------- | ---------------------------------------------------------- |
-| `jogo.py`                         | Jogo, detecção pela câmera e placar                        |
-| `Alice-Regular.ttf`               | Fonte da marca (precisa ficar na mesma pasta do `jogo.py`) |
-| `Alice-OFL.txt`                   | Licença da fonte                                           |
-| `verdia_genius/verdia_genius.ino` | Código do Arduino UNO, com a ligação dos LEDs no topo      |
+| Arquivo | Para quê |
+| --- | --- |
+| `jogo.py` | Jogo, detecção pela câmera e placar |
+| `Alice-Regular.ttf` | Fonte da marca (precisa ficar na mesma pasta do `jogo.py`) |
+| `Alice-OFL.txt` | Licença da fonte |
+| `verdia_genius/verdia_genius.ino` | Código do Arduino UNO, com a ligação dos LEDs no topo |
 
 ## Instalação
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install opencv-python pygame pyserial
+python3 -m venv venv
+source venv/bin/activate
+pip install opencv-python-headless==4.12.0.88 pygame pyserial
 ```
+
+A versão do OpenCV é fixa: a partir da 4.13 ele traz uma cópia própria do SDL, que entra em conflito com a do pygame no Mac.
 
 ## Execução
 
 ```bash
-source .venv/bin/activate
+source venv/bin/activate
 python jogo.py
 ```
 
+Na primeira vez, o macOS pede permissão para o Terminal usar a câmera. Libere e rode de novo.
+
 ## Variáveis de ambiente
 
-| Variável        | Padrão          | Quando mudar                                                                                          |
-| --------------- | --------------- | ----------------------------------------------------------------------------------------------------- |
-| `VERDIA_CAMERA` | `0`             | Se abrir a câmera errada (a do Mac ou a do iPhone), teste `1`, `2`... até aparecer a webcam do tripé. |
-| `VERDIA_PORTA`  | detecta sozinho | Se o Arduino não for encontrado. Liste as portas com `ls /dev/cu.*` e use a que tem `usbmodem`.       |
+| Variável | Padrão | Quando mudar |
+| --- | --- | --- |
+| `VERDIA_CAMERA` | `0` | Se abrir a câmera errada (a do Mac ou a do iPhone). Teste `1`, `2`... até aparecer a webcam do tripé. |
+| `VERDIA_PORTA` | detecta sozinho | Se o Arduino não for encontrado. Liste as portas com `ls /dev/cu.*` e use a que tem `usbmodem`. |
 
 Exemplo:
 
@@ -43,13 +47,13 @@ Sem Arduino conectado, o jogo roda normalmente, só sem os LEDs.
 
 ## Teclas
 
-| Tecla   | Ação                                                        |
-| ------- | ----------------------------------------------------------- |
+| Tecla | Ação |
+| --- | --- |
 | `ENTER` | Novo jogador (digite o nome e `ENTER` de novo para começar) |
-| `C`     | Calibrar a câmera                                           |
-| `B`     | Recalibrar só o verde, se a luz do local mudar              |
-| `F`     | Tela cheia                                                  |
-| `ESC`   | Cancelar e voltar à tela inicial                            |
+| `C` | Calibrar a câmera |
+| `B` | Recalibrar só o verde, se a luz do local mudar |
+| `F` | Tela cheia |
+| `ESC` | Cancelar e voltar à tela inicial |
 
 ## Calibração
 
