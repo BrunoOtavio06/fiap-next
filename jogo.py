@@ -10,6 +10,8 @@ import os
 import random
 import time
 
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
 import cv2
 import numpy as np
 import pygame
@@ -454,13 +456,13 @@ class Jogo:
         if frame is None or vista is None:
             return
 
-        if evento.type == pygame.MOUSEBUTTONDOWN and evento.button == 1:
+        if evento.type == pygame.MOUSEBUTTONDOWN and evento.button in (1, 3):
             self.arraste = [evento.pos, evento.pos]
 
         elif evento.type == pygame.MOUSEMOTION and self.arraste:
             self.arraste[1] = evento.pos
 
-        elif evento.type == pygame.MOUSEBUTTONUP and evento.button == 1 and self.arraste:
+        elif evento.type == pygame.MOUSEBUTTONUP and evento.button in (1, 3) and self.arraste:
             altura, largura = frame.shape[:2]
             x1, y1 = tela_para_camera(self.arraste[0], vista, largura, altura)
             x2, y2 = tela_para_camera(evento.pos, vista, largura, altura)
@@ -534,8 +536,7 @@ class Jogo:
         x0, y0, escala = vista
         for i, (x, y, w, h) in enumerate(zonas):
             r = pygame.Rect(x0 + x * escala, y0 + y * escala, w * escala, h * escala)
-            espessura = 6 if self.led_aceso == i else 2
-            pygame.draw.rect(self.tela, CORES_LED[i], r, espessura, border_radius=6)
+            pygame.draw.rect(self.tela, CORES_LED[i], r, 2, border_radius=6)
             if com_cobertura:
                 self.texto(self.fonte_pequena, f"{self.cobertura[i]:.0%}", CORES_LED[i],
                            pos=(r.x + 8, r.y + 4))
@@ -702,9 +703,12 @@ class Jogo:
         while self.rodando:
             self.agora = time.monotonic()
 
-            ok, frame = self.camera.read()
-            if ok:
-                self.frame = frame
+            # Enquanto um retângulo é arrastado, a imagem fica parada para o
+            # laço não esperar a câmera e o arraste acompanhar o mouse
+            if self.arraste is None:
+                ok, frame = self.camera.read()
+                if ok:
+                    self.frame = frame
 
             self.medir()
             self.tratar_eventos()
