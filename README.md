@@ -50,10 +50,12 @@ Sem Arduino conectado, o jogo roda normalmente, só sem os LEDs.
 | Tecla | Ação |
 | --- | --- |
 | `ENTER` | Novo jogador (digite o nome e `ENTER` de novo para começar) |
+| `R` | Mostrar o ranking completo (na tela inicial ou no fim de jogo) |
 | `C` | Calibrar a câmera |
 | `B` | Recalibrar só o verde, se a luz do local mudar |
 | `F` | Tela cheia |
 | `ESC` | Cancelar e voltar à tela inicial |
+| `Q` | Sair do jogo e apagar os LEDs |
 
 ## Calibração
 

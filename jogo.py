@@ -416,8 +416,24 @@ class Jogo:
         if k == pygame.K_ESCAPE:
             self.voltar_espera()
 
-        elif k == pygame.K_f and self.estado != "NOME":
+        elif self.estado == "NOME":
+            if k == pygame.K_BACKSPACE:
+                self.nome = self.nome[:-1]
+            elif enter and self.nome.strip():
+                self.iniciar_partida()
+
+        elif k == pygame.K_q:
+            self.rodando = False
+
+        elif k == pygame.K_f:
             self.alternar_tela_cheia()
+
+        elif self.estado == "RANKING":
+            if k == pygame.K_r:
+                self.voltar_espera()
+
+        elif k == pygame.K_r and self.estado in ("ESPERA", "FIM"):
+            self.estado = "RANKING"
 
         elif self.estado == "ESPERA":
             if enter and self.calib:
@@ -429,12 +445,6 @@ class Jogo:
                 self.estado = "CALIBRANDO"
             elif k == pygame.K_b:
                 self.recalibrar_verde()
-
-        elif self.estado == "NOME":
-            if k == pygame.K_BACKSPACE:
-                self.nome = self.nome[:-1]
-            elif enter and self.nome.strip():
-                self.iniciar_partida()
 
         elif self.estado == "FIM" and enter:
             self.pedir_nome()
@@ -554,7 +564,9 @@ class Jogo:
         self.texto(self.fonte_media, "Ranking", pos=(x, y))
         y += int(56 * k)
 
-        lista = self.ranking_ordenado()[:8]
+        linha = int(34 * k)
+        cabem = max(0, (area.bottom - int(16 * k) - y) // linha)
+        lista = self.ranking_ordenado()[:cabem]
         if not lista:
             self.texto(self.fonte_pequena, "Ninguém jogou ainda", pos=(x, y), alfa=170)
 
@@ -564,7 +576,37 @@ class Jogo:
             self.texto(self.fonte_pequena, r["nome"], cor, pos=(x + int(36 * k), y))
             pontos = self.fonte_pequena.render(str(r["pontos"]), True, cor)
             self.tela.blit(pontos, (x + largura - pontos.get_width(), y))
-            y += int(34 * k)
+            y += linha
+
+    def desenhar_ranking_completo(self):
+        largura, altura = self.tela.get_size()
+        k = self.k
+        margem = int(48 * k)
+
+        self.texto(self.fonte_logo, "verdia", pos=(margem, int(28 * k)))
+        self.texto(self.fonte_titulo, "Ranking", centro=(largura // 2, int(130 * k)))
+
+        ordem = self.ranking_ordenado()
+        if not ordem:
+            self.texto(self.fonte_media, "Ninguém jogou ainda", centro=(largura // 2, altura // 2), alfa=200)
+
+        # Duas colunas, com quantas linhas couberem na tela
+        topo = int(200 * k)
+        linha = int(48 * k)
+        por_coluna = max(1, (altura - topo - int(90 * k)) // linha)
+        largura_coluna = (largura - 4 * margem) // 2
+
+        for i, r in enumerate(ordem[:2 * por_coluna]):
+            x = margem + (i // por_coluna) * (largura_coluna + 2 * margem)
+            y = topo + (i % por_coluna) * linha
+            cor = LIMA if r is self.ultima_entrada else BRANCO
+            self.texto(self.fonte_media, f"{i + 1}", cor, pos=(x, y), alfa=170)
+            self.texto(self.fonte_media, r["nome"], cor, pos=(x + int(64 * k), y))
+            pontos = self.fonte_media.render(str(r["pontos"]), True, cor)
+            self.tela.blit(pontos, (x + largura_coluna - pontos.get_width(), y))
+
+        self.texto(self.fonte_pequena, "R ou ESC para voltar · Q sair",
+                   pos=(margem, altura - int(44 * k)), alfa=150)
 
     def desenhar_progresso(self, cx, y):
         # Uma bolinha por LED da sequência; as já acertadas ficam preenchidas
@@ -654,7 +696,8 @@ class Jogo:
         # Coluna da direita: ranking em cima, câmera embaixo
         x = largura - coluna - margem
         alt_camera = int(coluna * 3 / 4) + int(40 * k)
-        area_camera = pygame.Rect(x, altura - margem - alt_camera, coluna, alt_camera)
+        rodape = int(36 * k)  # espaço para a linha de teclas
+        area_camera = pygame.Rect(x, altura - margem - rodape - alt_camera, coluna, alt_camera)
         area_ranking = pygame.Rect(x, margem, coluna, area_camera.y - margem - int(20 * k))
 
         self.desenhar_ranking(area_ranking)
@@ -663,8 +706,8 @@ class Jogo:
         if self.calib:
             self.desenhar_zonas(self.calib["zonas"], True)
 
-        self.texto(self.fonte_pequena, "ENTER jogador · C calibrar · B recalibrar verde · "
-                   "F tela cheia · ESC voltar", pos=(margem, altura - int(44 * k)), alfa=150)
+        self.texto(self.fonte_pequena, "ENTER jogador · R ranking · C calibrar · B recalibrar verde · "
+                   "F tela cheia · ESC voltar · Q sair", pos=(margem, altura - int(44 * k)), alfa=150)
 
     def desenhar_calibracao(self):
         largura, altura = self.tela.get_size()
@@ -693,6 +736,8 @@ class Jogo:
         self.tela.blit(self.fundo, (0, 0))
         if self.estado == "CALIBRANDO":
             self.desenhar_calibracao()
+        elif self.estado == "RANKING":
+            self.desenhar_ranking_completo()
         else:
             self.desenhar_jogo()
         pygame.display.flip()
