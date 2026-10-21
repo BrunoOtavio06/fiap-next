@@ -90,6 +90,15 @@ def conectar_arduino():
     return conexao
 
 
+def abrir_camera():
+    camera = cv2.VideoCapture(CAMERA)
+    camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    if not camera.isOpened():
+        print(f"Câmera {CAMERA} não abriu. Tentando de novo em alguns segundos.")
+    return camera
+
+
 def fracao_verde(hsv, zona):
     x, y, w, h = zona
     mascara = cv2.inRange(hsv[y:y + h, x:x + w], VERDE_MIN, VERDE_MAX)
@@ -134,9 +143,8 @@ class Jogo:
         self.relogio = pygame.time.Clock()
         self.preparar_tela()
 
-        self.camera = cv2.VideoCapture(CAMERA)
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.camera = abrir_camera()
+        self.t_frame = time.monotonic()
         self.frame = None
         self.vista = None
         self.cobertura = [0.0, 0.0, 0.0]
@@ -252,6 +260,7 @@ class Jogo:
     # ----- Partida -----
 
     def voltar_espera(self):
+        self.arraste = None
         pygame.key.stop_text_input()
         self.estado = "ESPERA"
         self.led_aceso = None
@@ -754,6 +763,13 @@ class Jogo:
                 ok, frame = self.camera.read()
                 if ok:
                     self.frame = frame
+                    self.t_frame = self.agora
+                elif self.agora - self.t_frame > 3:
+                    # Câmera parou (cabo solto, outro app usando): reabre
+                    self.frame = None
+                    self.camera.release()
+                    self.camera = abrir_camera()
+                    self.t_frame = time.monotonic()
 
             self.medir()
             self.tratar_eventos()
