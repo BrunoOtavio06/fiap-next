@@ -11,10 +11,12 @@
 // Ligação: cada LED com o próprio resistor de 220 Ω.
 // pino → resistor → perna longa do LED; perna curta → GND.
 
-const int PINOS[3][2] = {
-  {2, 3},  // verde    (grama pequena)
-  {4, 5},  // amarelo  (grama média)
-  {6, 7}   // vermelho (grama grande)
+const int LEDS_POR_COR = 3;
+
+const int PINOS[3][LEDS_POR_COR] = {
+  {2, 3, 4},   // verde    (grama pequena)
+  {5, 6, 7},   // amarelo  (grama média)
+  {8, 9, 10}   // vermelho (grama grande)
 };
 
 bool modoEspera = true;
@@ -23,8 +25,9 @@ unsigned long ultimoPasso = 0;
 
 
 void ligarCor(int cor, bool ligado) {
-  digitalWrite(PINOS[cor][0], ligado ? HIGH : LOW);
-  digitalWrite(PINOS[cor][1], ligado ? HIGH : LOW);
+  for (int i = 0; i < LEDS_POR_COR; i++) {
+    digitalWrite(PINOS[cor][i], ligado ? HIGH : LOW);
+  }
 }
 
 
@@ -71,8 +74,9 @@ void animacaoFim() {
 
 void setup() {
   for (int cor = 0; cor < 3; cor++) {
-    pinMode(PINOS[cor][0], OUTPUT);
-    pinMode(PINOS[cor][1], OUTPUT);
+    for (int i = 0; i < LEDS_POR_COR; i++) {
+      pinMode(PINOS[cor][i], OUTPUT);
+    }
   }
 
   ligarTodas(false);
