@@ -5,6 +5,7 @@ acender os LEDs, usa a câmera para ver em qual grama a mão foi colocada e
 mostra o placar e o ranking.
 """
 
+from collections import deque
 import json
 import os
 import random
@@ -29,15 +30,15 @@ TEMPO_LED_APAGADO = 0.3
 TEMPO_ANTES_SEQUENCIA = 1.0
 TEMPO_CONFIRMA = 0.4      # mão parada sobre uma grama por esse tempo vira jogada
 TEMPO_MAO_FORA = 0.2      # todas as gramas livres por esse tempo = mão saiu
-TEMPO_LIMITE = 5.0        # sem jogada por esse tempo = fim de jogo
+TEMPO_LIMITE = 8.0        # sem jogada por esse tempo = fim de jogo
 TEMPO_INICIO = 2.5        # a animação de início do Arduino dura cerca de 2 s
 TEMPO_FIM = 8.0
 
-# Detecção: fração da região que deixou de ser verde
-LIMIAR_MAO = 0.35
-LIMIAR_LIVRE = 0.15
-VERDE_MIN = np.array([30, 40, 30])     # HSV do OpenCV (H vai de 0 a 179)
-VERDE_MAX = np.array([90, 255, 255])
+# Detecção: fração da região que mudou em relação à imagem de referência
+LIMIAR_MAO = 0.20
+LIMIAR_LIVRE = 0.10
+DIFERENCA_MIN = 40        # quanto um pixel precisa mudar (0 a 255) para contar como mão
+ATUALIZA_REF = 0.03       # a cada frame, a referência se aproxima 3% do que a câmera vê livre
 
 NOMES_GRAMAS = ["pequena", "média", "grande"]
 COMANDOS_LED = [b"v", b"a", b"r"]
@@ -54,6 +55,7 @@ CORES_LED = [(72, 214, 110), (255, 214, 64), (255, 94, 84)]
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
 ARQ_CALIBRACAO = os.path.join(PASTA, "calibracao.json")
+ARQ_REFERENCIA = os.path.join(PASTA, "referencia.png")
 ARQ_RANKING = os.path.join(PASTA, "ranking.json")
 ARQ_FONTE_MARCA = os.path.join(PASTA, "Alice-Regular.ttf")
 
@@ -99,10 +101,12 @@ def abrir_camera():
     return camera
 
 
-def fracao_verde(hsv, zona):
-    x, y, w, h = zona
-    mascara = cv2.inRange(hsv[y:y + h, x:x + w], VERDE_MIN, VERDE_MAX)
-    return cv2.countNonZero(mascara) / mascara.size
+def suavizar(frame):
+    return cv2.GaussianBlur(frame, (9, 9), 0).astype(np.float32)
+
+
+def recortes(imagem, zonas):
+    return [imagem[y:y + h, x:x + w] for x, y, w, h in zonas]
 
 
 def fundo_da_marca(largura, altura):
@@ -148,11 +152,17 @@ class Jogo:
         self.frame = None
         self.vista = None
         self.cobertura = [0.0, 0.0, 0.0]
+        self.historico = deque(maxlen=3)
 
         self.arduino = conectar_arduino()
         self.led_aceso = None
 
         self.calib = carregar_json(ARQ_CALIBRACAO, None)
+        imagem = cv2.imread(ARQ_REFERENCIA) if os.path.exists(ARQ_REFERENCIA) else None
+        if self.calib and imagem is not None and list(imagem.shape[1::-1]) == self.calib["tamanho"]:
+            self.usar_referencia(imagem, self.calib["zonas"])
+        else:
+            self.calib = None
         self.ranking = carregar_json(ARQ_RANKING, [])
 
         self.estado = "ESPERA"
@@ -239,23 +249,35 @@ class Jogo:
             self.aviso = "A resolução da câmera mudou. Calibre de novo (C)."
             return
 
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        atual = recortes(suavizar(frame), self.calib["zonas"])
+
+        # Quanto a luz mudou em cada região desde a referência (um valor por cor).
+        # A mediana das três ignora a região que está com a mão.
+        razao = [np.median(a / np.maximum(r, 1), axis=(0, 1)) for a, r in zip(atual, self.ref_zonas)]
+        luz = np.median(np.array(razao) / self.fatores, axis=0)
+
+        medidas = []
         for i in range(3):
-            verde = fracao_verde(hsv, self.calib["zonas"][i])
-            self.cobertura[i] = min(1.0, max(0.0, 1 - verde / self.calib["base"][i]))
+            corrigida = atual[i] / (luz * self.fatores[i])
+            mudou = np.abs(corrigida - self.ref_zonas[i]).max(axis=2) > DIFERENCA_MIN
+            medidas.append(float(mudou.mean()))
 
-    def medir_base(self, frame, zonas):
-        # Quanto de verde cada região tem sem nenhuma mão em cima
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        base = [fracao_verde(hsv, z) for z in zonas]
+            # Região livre: aprende como a luz dela difere da média (luz que muda de lugar)
+            if medidas[i] < 0.3:
+                self.fatores[i] = 0.7 * self.fatores[i] + 0.3 * razao[i] / luz
 
-        for i in range(3):
-            if base[i] < 0.3:
-                self.aviso = (f"A região da grama {NOMES_GRAMAS[i]} quase não tem verde "
-                              f"({base[i]:.0%}). Desenhe só sobre a grama, sem mãos em cima.")
-                return None
+            # Região livre: a referência acompanha a imagem, menos nos pixels que parecem mão
+            if medidas[i] < LIMIAR_LIVRE:
+                ref = self.ref_zonas[i]
+                ref += ATUALIZA_REF * (corrigida - ref) * ~mudou[..., None]
 
-        return base
+        self.historico.append(medidas)
+        self.cobertura = list(np.median(self.historico, axis=0))
+
+    def usar_referencia(self, imagem, zonas):
+        self.ref_zonas = recortes(suavizar(imagem), zonas)
+        self.fatores = np.ones((3, 3), np.float32)
+        self.historico.clear()
 
     # ----- Partida -----
 
@@ -453,21 +475,19 @@ class Jogo:
                 self.arraste = None
                 self.estado = "CALIBRANDO"
             elif k == pygame.K_b:
-                self.recalibrar_verde()
+                self.recalibrar_referencia()
 
         elif self.estado == "FIM" and enter:
             self.pedir_nome()
 
-    def recalibrar_verde(self):
+    def recalibrar_referencia(self):
         frame = self.frame
         if frame is None or self.calib is None:
             return
 
-        base = self.medir_base(frame, self.calib["zonas"])
-        if base:
-            self.calib["base"] = base
-            salvar_json(ARQ_CALIBRACAO, self.calib)
-            self.aviso = "Verde recalibrado."
+        cv2.imwrite(ARQ_REFERENCIA, frame)
+        self.usar_referencia(frame, self.calib["zonas"])
+        self.aviso = "Referência atualizada."
 
     def mouse_calibracao(self, evento):
         frame = self.frame
@@ -496,13 +516,9 @@ class Jogo:
             if len(self.zonas_novas) < 3:
                 return
 
-            base = self.medir_base(frame, self.zonas_novas)
-            if base is None:
-                self.zonas_novas = []
-                return
-
-            self.calib = {"tamanho": [largura, altura], "zonas": self.zonas_novas, "base": base}
+            self.calib = {"tamanho": [largura, altura], "zonas": self.zonas_novas}
             salvar_json(ARQ_CALIBRACAO, self.calib)
+            self.recalibrar_referencia()
             self.aviso = "Câmera calibrada."
             self.voltar_espera()
 
@@ -715,7 +731,7 @@ class Jogo:
         if self.calib:
             self.desenhar_zonas(self.calib["zonas"], True)
 
-        self.texto(self.fonte_pequena, "ENTER jogador · R ranking · C calibrar · B recalibrar verde · "
+        self.texto(self.fonte_pequena, "ENTER jogador · R ranking · C calibrar · B nova referência · "
                    "F tela cheia · ESC voltar · Q sair", pos=(margem, altura - int(44 * k)), alfa=150)
 
     def desenhar_calibracao(self):
